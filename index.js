@@ -1,7 +1,9 @@
 /* eslint-disable  func-names */
 /* eslint-disable  no-console */
+"use strict"
 
 const Alexa = require('ask-sdk-core');
+const Adapter=require('ask-sdk-dynamodb-persistence-adapter');//永続アトリビュートを操作するために必要なモジュール
 
 const fortunes = [
     { 'score': 'good', 'description': '星みっつで良いでしょう' },
@@ -50,21 +52,36 @@ const HoroscopeIntentHandler = {
 
         const fortune = fortunes[Math.floor(Math.random() * 3)];
 
-        const speechOutput = '今日の' + sign + 'の運勢は' + fortune.description+ '。';
+        const speechOutput = '今日の' + sign + 'の運勢は' + fortune.description + '。';
 
         const reprompt = "他にラッキーカラーが占えます。ラッキーカラーを聞きますか？";
 
+
+        /////////////セッション情報の取得と格納////////////////
         //ここでawait
         //getSessionAttributesメソッドは非同期なのか。
-        let attributes = await handlerInput.attributesManager.getSessionAttributes();
-        attributes.sign = sign;//セッションオブジェクトに文字列「sign」をキーとしてsign変数の中身を入れる。
+        let sessionAttributes = await handlerInput.attributesManager.getSessionAttributes();
+        sessionAttributes.sign = sign;//セッションオブジェクトに文字列「sign」をキーとしてsign変数の中身を入れる。
 
         //またawait
-        await handlerInput.attributesManager.setSessionAttributes(attributes);//setし戻す
+        await handlerInput.attributesManager.setSessionAttributes(sessionAttributes);//setし戻す
 
+        ////////////////////////////////////////////////////
+
+
+        //////////////////永続アトリビュート////////////////////////
+        const { attributesManager } = handlerInput;//この波括弧はなに？
+        //永続アトリビュートの取得
+        const persistentAttributes = await attributesManager.getPersistentAttributes();//
+        persistentAttributes.sign = sign;
+
+        //永続アトリビュートの格納と保存
+        attributesManager.setPersistentAttributes(persistentAttributes);
+        await attributesManager.savePersistentAttributes();
+        //////////////////////////////////////////////////////////
 
         return handlerInput.responseBuilder
-            .speak(speechOutput+reprompt)
+            .speak(speechOutput + reprompt)
             .withSimpleCard(sign + 'の運勢：', speechOutput)
             .reprompt(reprompt)
             .getResponse();
@@ -78,14 +95,23 @@ const LuckyColorIntentHandler = {
             && request.intent.name === 'LuckyColorIntent';
     },
     async handle(handlerInput) {
-        const attributes = await handlerInput.attributesManager.getSessionAttributes();
+
+        /////////////セッション情報の取得////////////
+        const sessionAttributes = await handlerInput.attributesManager.getSessionAttributes();
+        ///////////////////////////////////////////
+
+        /////////////永続アトリビュートの取得//////////
+        const persistentAttributes=await handlerInput.attributesManager.getPersistentAttributes();
+        /////////////////////////////////////////////
+
+        
+        const sign=sessionAttributes.sign||persistentAttributes.sign;
 
         let speechOutput;
 
-        if(!attributes.sign)
-        {
-            speechOutput="そういえばまだ運勢を占っていませんでしたね。";
-            speechOutput+="今日の運勢を占います。"+"例えば、ふたご座の運勢を教えてと訊いてください。";
+        if (!sign) {
+            speechOutput = "そういえばまだ運勢を占っていませんでしたね。";
+            speechOutput += "今日の運勢を占います。" + "例えば、ふたご座の運勢を教えてと訊いてください。";
 
             return handlerInput.responseBuilder
                 .speak(speechOutput)
@@ -93,13 +119,14 @@ const LuckyColorIntentHandler = {
                 .getResponse();
         }
 
-        const luckyColor=luckyColors[Math.floor(Math.random()*12)];
+        const luckyColor = luckyColors[Math.floor(Math.random() * luckyColors.length)];
 
-        speechOutput="今日の"+attributes.sign+"のラッキーカラーは"+luckyColor+"です。素敵ないちにちを。";
+        speechOutput = "今日の" + sign + "のラッキーカラーは" + luckyColor + "です。素敵ないちにちを。";
 
         return handlerInput.responseBuilder
             .speak(speechOutput)
-            .getResponse();           
+            .withShouldEndSession(true)
+            .getResponse();
     }
 };
 
@@ -161,10 +188,20 @@ const ErrorHandler = {
     },
 };
 
+
+////////////DynamoDBの設定情報///////////////
+const config ={
+    tableName:'HoroscopeSkillTable',//DynamoDBのテーブル名
+    createTable:true//テーブルを自動生成する場合はtrue
+};
+const DynamoDBAdapter=new Adapter.DynamoDbPersistenceAdapter(config);
+
+
 const skillBuilder = Alexa.SkillBuilders.custom();
 
 exports.handler = skillBuilder
     .addRequestHandlers(
+        LaunchRequestHandler,
         HoroscopeIntentHandler,
         LuckyColorIntentHandler,
         HelpIntentHandler,
@@ -172,4 +209,5 @@ exports.handler = skillBuilder
         SessionEndedRequestHandler
     )
     .addErrorHandlers(ErrorHandler)
+    .withPersistenceAdapter(DynamoDBAdapter)//DynamoDBAdapterをPersistenceAdapterに設定する
     .lambda();
